@@ -1,0 +1,15 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+work/dataset/
+work/creditcardfraud.zip
+work/venv/
+work/pydeps/
+work/piptmp/
+outputs/*.db
+.DS_Store
+Thumbs.db
+.idea/
+
