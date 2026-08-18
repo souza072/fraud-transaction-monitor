@@ -1,6 +1,8 @@
-# Localizador de transações suspeitas
+# Fraud Transaction Monitor
 
-Projeto experimental que importa o dataset ULB/Kaggle para SQLite, treina um classificador probabilístico, calcula riscos, grava alertas e produz um painel pesquisável.
+Sistema experimental de detecção e monitoramento de fraudes em transações, com modelo probabilístico, SQLite, alertas explicáveis e dashboard interativo para VS Code.
+
+O projeto importa o dataset ULB/Kaggle, treina um classificador, calcula o risco de cada transação, registra alertas e apresenta justificativas técnicas em um painel pesquisável.
 
 ## Estrutura
 
