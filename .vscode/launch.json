@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Treinar detector",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/fraud_detector.py",
+      "console": "integratedTerminal",
+      "args": ["train", "outputs/fraud_detection.db", "outputs/fraud_model.json"]
+    },
+    {
+      "name": "Gerar alertas",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/fraud_detector.py",
+      "console": "integratedTerminal",
+      "args": ["score", "outputs/fraud_detection.db", "outputs/fraud_model.json"]
+    }
+  ]
+}
+
