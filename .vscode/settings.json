@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "python",
+  "python.terminal.activateEnvironment": false,
+  "files.exclude": {"**/__pycache__": true, "work/venv": true, "work/pydeps": true, "work/piptmp": true}
+}
+
