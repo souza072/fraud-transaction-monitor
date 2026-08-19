@@ -8,8 +8,15 @@ work/creditcardfraud.zip
 work/venv/
 work/pydeps/
 work/piptmp/
+work/runtime/
+work/pip-temp/
 outputs/*.db
+outputs/transacoes-suspeitas-fragment.html
 .DS_Store
 Thumbs.db
 .idea/
 
+# Artefatos exclusivos da hospedagem ChatGPT/Sites
+public-site/
+.openai/
+site-package*.tar.gz

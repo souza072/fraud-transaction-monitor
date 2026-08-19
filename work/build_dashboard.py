@@ -1,6 +1,5 @@
-import html
 import json
-import math
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -8,103 +7,60 @@ ROOT = Path(__file__).resolve().parents[1]
 DB = ROOT / "outputs" / "fraud_detection.db"
 MODEL = ROOT / "outputs" / "fraud_model.json"
 OUT = ROOT / "outputs" / "painel-transacoes-suspeitas.html"
-FRAGMENT = ROOT / "outputs" / "transacoes-suspeitas-fragment.html"
-model = json.loads(MODEL.read_text(encoding="utf-8"))
-features = model["features"]
+LOGO = ROOT / "assets" / "brand-logo.png"
+OUTPUT_LOGO = ROOT / "outputs" / "brand-logo.png"
 
-with sqlite3.connect(DB) as con:
-    con.row_factory = sqlite3.Row
-    rows = con.execute(f"""
-        SELECT a.transaction_id AS id, a.fraud_probability AS risk,
-               a.actual_class AS actual, {', '.join('t.' + name for name in features)}
-        FROM alerts a JOIN transactions t ON t.rowid = a.transaction_id
-        ORDER BY a.fraud_probability DESC, a.transaction_id
-    """).fetchall()
+artifact = json.loads(MODEL.read_text(encoding="utf-8"))
+with sqlite3.connect(DB) as connection:
+    connection.row_factory = sqlite3.Row
+    rows = connection.execute("""SELECT a.*, t.Time, t.Amount FROM alerts a
+        JOIN transactions t ON t.rowid = a.transaction_id
+        ORDER BY a.fraud_probability DESC""").fetchall()
 
-def technical_evidence(row):
-    contributions = []
-    normal, fraud = model["classes"]["0"], model["classes"]["1"]
-    for index, name in enumerate(features):
-        value = float(row[name])
-        m0, v0 = normal["mean"][index], normal["var"][index]
-        m1, v1 = fraud["mean"][index], fraud["var"][index]
-        log0 = -0.5 * (math.log(2 * math.pi * v0) + ((value - m0) ** 2) / v0)
-        log1 = -0.5 * (math.log(2 * math.pi * v1) + ((value - m1) ** 2) / v1)
-        contributions.append((log1 - log0, name))
-    strongest = sorted(contributions, reverse=True)[:3]
-    signals = ", ".join(f"{name} ({score:+.1f})" for score, name in strongest)
-    if row["actual"] == 1:
-        return f"Confirmada pelo rótulo Class=1 do dataset. Maiores sinais técnicos do modelo: {signals}."
-    return f"Não confirmada no dataset (Class=0). O alerta foi provocado principalmente por: {signals}."
+alerts = []
+for row in rows:
+    explanation = json.loads(row["explanation"])
+    alerts.append({
+        "id": row["transaction_id"],
+        "probability": round(row["fraud_probability"] * 100, 3),
+        "risk": row["risk_level"],
+        "actual": row["actual_class"],
+        "status": row["review_status"],
+        "time": round(row["Time"], 2),
+        "amount": round(row["Amount"], 2),
+        "basis": explanation["basis"],
+        "signals": explanation["top_features"],
+    })
 
-data = [{"id": r["id"], "r": round(r["risk"] * 100, 4), "a": r["actual"],
-         "t": round(r["Time"], 2), "v": round(r["Amount"], 2),
-         "j": technical_evidence(r)} for r in rows]
-summary = {
-    "alerts": len(data),
-    "confirmed": sum(x["a"] == 1 for x in data),
-    "threshold": round(model["threshold"] * 100, 2),
-    "recall": round(model["evaluation"]["recall"] * 100, 1),
+payload = {
+    "alerts": alerts,
+    "evaluation": artifact["evaluation"],
+    "model": artifact["selected_model"],
+    "threshold": artifact["threshold"] * 100,
+    "version": artifact["model_version"],
 }
-artifacts = [
-    ("Banco de transações e alertas", "fraud_detection.db", DB.stat().st_size),
-    ("Modelo treinado e métricas", "fraud_model.json", MODEL.stat().st_size),
-    ("Painel interativo", "painel-transacoes-suspeitas.html", 0),
-]
 
-def size_label(size):
-    return f"{size / 1024 / 1024:.1f} MB" if size >= 1024 * 1024 else f"{size / 1024:.1f} KB"
+template = r'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fraud Transaction Monitor</title><style>
+:root{color-scheme:light;--bg:#f6f8fc;--surface:#fff;--surface-2:#f9fafb;--text:#101828;--muted:#667085;--border:#e4e7ec;--primary:#175cd3;--primary-soft:#eff4ff;--critical:#b42318;--critical-bg:#fef3f2;--high:#b54708;--high-bg:#fffaeb;--moderate:#175cd3;--moderate-bg:#eff8ff;--watch:#027a48;--watch-bg:#ecfdf3;--shadow:0 2px 10px rgba(16,24,40,.06)}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}button,input,select{font:inherit}button{cursor:pointer}main{max-width:1240px;margin:auto;padding:28px}.topbar{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}.eyebrow{color:var(--primary);font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase}h1{font-size:28px;line-height:1.2;margin:5px 0 6px;letter-spacing:-.02em}.subtitle{color:var(--muted);margin:0}.updated{color:var(--muted);font-size:12px;white-space:nowrap}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:24px 0}.stat{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;box-shadow:var(--shadow)}.stat-head{display:flex;justify-content:space-between;color:var(--muted)}.stat-value{font-size:30px;font-weight:700;margin:8px 0 2px;letter-spacing:-.03em}.stat small{color:var(--muted)}.risk-strip{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;box-shadow:var(--shadow);margin-bottom:22px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.section-head h2{font-size:16px;margin:0}.risk-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}.risk-filter{border:1px solid var(--border);background:var(--surface-2);border-radius:10px;padding:12px;text-align:left;transition:.15s}.risk-filter:hover,.risk-filter.active{border-color:var(--primary);background:var(--primary-soft)}.risk-filter strong,.risk-filter span{display:block}.risk-filter strong{font-size:20px}.risk-filter span{color:var(--muted);font-size:12px}.workspace{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}.toolbar{padding:16px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:end;flex-wrap:wrap}.field{display:grid;gap:5px}.field span{font-size:12px;color:var(--muted);font-weight:600}.field.search{flex:1;min-width:210px}.control{height:38px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);padding:0 10px}.control:focus{outline:3px solid #d1e0ff;border-color:var(--primary)}.btn{height:38px;border:1px solid var(--border);border-radius:8px;padding:0 13px;background:var(--surface);color:var(--text);font-weight:600}.btn:hover{background:var(--surface-2)}.btn.primary{background:var(--primary);border-color:var(--primary);color:#fff}.btn.link{border:0;background:transparent;color:var(--primary)}.result-row{padding:11px 16px;display:flex;justify-content:space-between;align-items:center;color:var(--muted);border-bottom:1px solid var(--border)}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:760px}th,td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--border)}th{background:var(--surface-2);color:var(--muted);font-size:12px;font-weight:700;white-space:nowrap}tbody tr:hover{background:#fafcff}.num{text-align:right;font-variant-numeric:tabular-nums}.id{font-weight:650}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:650}.badge.critical{color:var(--critical);background:var(--critical-bg)}.badge.high{color:var(--high);background:var(--high-bg)}.badge.moderate{color:var(--moderate);background:var(--moderate-bg)}.badge.watch{color:var(--watch);background:var(--watch-bg)}.status{color:var(--muted)}.status.confirmed{color:var(--critical);font-weight:650}.pager{display:flex;justify-content:space-between;align-items:center;padding:13px 16px}.pager-actions{display:flex;gap:8px}details.model-info{margin-top:18px;color:var(--muted)}details.model-info summary{cursor:pointer;font-weight:600}details.model-info p{margin:8px 0 0}dialog{border:0;border-radius:16px;padding:0;width:min(540px,calc(100% - 28px));box-shadow:0 24px 80px rgba(16,24,40,.24);color:var(--text)}dialog::backdrop{background:rgba(16,24,40,.48)}.dialog-head{padding:20px 22px 14px;display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--border)}.dialog-head h2{margin:0;font-size:19px}.close{border:0;background:transparent;font-size:22px;color:var(--muted)}.dialog-body{padding:20px 22px}.detail-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.detail{background:var(--surface-2);padding:12px;border-radius:9px}.detail span,.signal span{display:block;color:var(--muted);font-size:12px}.detail strong{font-size:16px}.signals{margin-top:18px}.signal{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)}.signal span{display:inline}.note{margin-top:16px;padding:12px;background:var(--primary-soft);border-radius:9px;color:#1849a9}.empty{padding:42px;text-align:center;color:var(--muted)}@media(max-width:760px){main{padding:16px}.topbar{display:block}.updated{margin-top:10px}.stats{grid-template-columns:1fr}.risk-grid{grid-template-columns:repeat(2,1fr)}.toolbar{align-items:stretch}.field,.field.search{width:100%}.control,.btn{width:100%}.detail-grid{grid-template-columns:1fr}}@media(max-width:420px){.risk-grid{grid-template-columns:1fr}}
+.brand{display:flex;align-items:center;gap:16px}.logo-wrap{position:relative;width:76px;height:76px;flex:0 0 auto}.brand-logo{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 5px 10px rgba(0,200,239,.2))}.electric-bolt{position:absolute;inset:-12px -17px;width:calc(100% + 34px);height:calc(100% + 24px);overflow:visible;pointer-events:none;opacity:0;animation:electric-flash 3.2s linear infinite}.electric-main,.electric-branch{fill:none;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:120;stroke-dashoffset:120}.electric-main{stroke:#e8fbff;stroke-width:2.3;filter:drop-shadow(0 0 2px #fff) drop-shadow(0 0 6px #00c8ff) drop-shadow(0 0 11px #175cd3);animation:electric-draw 3.2s linear infinite}.electric-branch{stroke:#66e8ff;stroke-width:1.15;filter:drop-shadow(0 0 4px #00c8ff);animation:electric-draw 3.2s .035s linear infinite}@keyframes electric-flash{0%,61%,100%{opacity:0}64%{opacity:1}68%{opacity:.2}71%{opacity:1}77%{opacity:0}}@keyframes electric-draw{0%,61%{stroke-dashoffset:120}69%,76%{stroke-dashoffset:0}77%,100%{stroke-dashoffset:-120}}@media(prefers-reduced-motion:reduce){.electric-bolt{animation:none;opacity:.72}.electric-main,.electric-branch{animation:none;stroke-dashoffset:0}}@media(max-width:520px){.brand{align-items:flex-start;gap:12px}.logo-wrap{width:58px;height:58px}h1{font-size:24px}}
+:root{color-scheme:dark;--bg:#02050b;--surface:#071426;--surface-2:#0b1d35;--text:#eaf6ff;--muted:#94a9c6;--border:#17395f;--primary:#09c9ee;--primary-soft:#07365c;--shadow:0 12px 32px rgba(0,0,0,.3)}body{background:radial-gradient(circle at 20% -10%,#082950 0,transparent 34%),#02050b}.eyebrow{color:#16d9f4}.stat{background:linear-gradient(145deg,#073568,#062451 58%,#051b3c);border-color:#0c74b8;box-shadow:0 12px 28px rgba(0,70,150,.22),inset 0 1px rgba(74,222,255,.14)}.stat-head,.stat small{color:#b7d9f4}.stat-value{color:#fff;text-shadow:0 0 18px rgba(9,201,238,.32)}.risk-strip,.workspace{background:linear-gradient(160deg,#071426,#06101f);border-color:#15375d}.risk-filter{background:#0a1b31}.risk-filter:hover,.risk-filter.active{border-color:#09c9ee;background:#07365c;box-shadow:0 0 0 1px rgba(9,201,238,.15),0 6px 18px rgba(0,105,180,.2)}.control,.btn{background:#091a2e;border-color:#1a416b;color:#eaf6ff}.btn:hover{background:#0d2744}.btn.primary{background:linear-gradient(135deg,#0878c1,#09bddd);border-color:#0fc9e9;color:#fff}.table-wrap,table{background:#06101f}th{background:#0a1b31;color:#a8bdd8}th,td{border-color:#15304f}tbody tr:hover{background:#0a2039}.result-row,.pager{background:#071426}.detail{background:#0a1b31}.note{background:#07365c;color:#bfeeff}dialog{background:#071426}.signal{border-color:#15304f}details.model-info{color:#94a9c6}
+.stats{position:relative;padding:18px;border:1px solid rgba(80,220,255,.46);border-radius:22px;background:radial-gradient(circle at 8% 0,rgba(75,225,255,.36),transparent 36%),linear-gradient(120deg,#0b4f88 0%,#087fc1 45%,#0c5e9e 72%,#07345f 100%);box-shadow:0 22px 52px rgba(0,93,180,.34),inset 0 1px rgba(195,248,255,.2)}.stats:before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(105deg,transparent 22%,rgba(141,239,255,.16) 50%,transparent 76%)}.stat{position:relative;background:linear-gradient(145deg,rgba(10,93,160,.96),rgba(8,70,132,.96) 58%,rgba(7,51,102,.97));border-color:#22b9e8;box-shadow:0 12px 28px rgba(0,31,80,.3),inset 0 1px rgba(158,239,255,.24)}@media(max-width:760px){.stats{padding:12px;border-radius:18px}}
+.risk-strip,.workspace{background:radial-gradient(circle at 100% 0,rgba(56,207,244,.2),transparent 31%),linear-gradient(145deg,#0a548f,#074678 55%,#062f58);border-color:rgba(53,193,235,.55);box-shadow:0 18px 42px rgba(0,67,135,.25),inset 0 1px rgba(174,241,255,.13)}.risk-filter{background:linear-gradient(145deg,#0d6da8,#095481);border-color:#228fc0}.risk-filter span{color:#d0eaff}.risk-filter:hover,.risk-filter.active{background:linear-gradient(145deg,#1598d1,#0873ad);border-color:#67e3fa}.toolbar,.result-row,.pager{background:rgba(4,38,72,.54)}.control,.btn{background:#0b5483;border-color:#258fbd}.control:focus{outline-color:rgba(54,211,245,.35)}.table-wrap,table{background:#082e54}th{background:#0d5b8c;color:#e4f6ff}th,td{border-color:#1b638e}tbody tr:nth-child(even){background:rgba(15,83,126,.23)}tbody tr:hover{background:#0d6599}.detail{background:linear-gradient(145deg,#0d6398,#094d7b)}dialog{background:linear-gradient(155deg,#0a568b,#06355f)}.dialog-head{background:rgba(2,31,59,.35)}.signal{border-color:#237da9}.note{background:#0a74a8;color:#e5faff}
+html{min-height:100%;background:#010711}body{min-height:100vh;background:linear-gradient(180deg,#35b8ee 0%,#178bc8 12%,#0b609d 28%,#073e70 48%,#042746 68%,#021528 84%,#010711 100%);background-repeat:no-repeat;background-size:100% 100%}.topbar h1{color:#021d39;text-shadow:0 1px rgba(255,255,255,.2)}.topbar .subtitle,.topbar .updated{color:#06325a}.topbar .eyebrow{color:#003763}
+</style></head><body><main><header class="topbar"><div class="brand"><span class="logo-wrap"><img class="brand-logo" src="brand-logo.png" alt="Logo do monitor de transações"><svg class="electric-bolt" viewBox="0 0 110 100" aria-hidden="true"><path class="electric-main" d="M-2 46 12 43 22 48 32 39 43 45 53 31 61 42 71 36 80 46 91 39 112 44"/><path class="electric-branch" d="M32 39 28 29 22 24M53 31 50 19 55 10M71 36 77 25 76 17M80 46 85 56 82 68"/></svg></span><div><div class="eyebrow">Monitoramento de risco</div><h1>Transações suspeitas</h1><p class="subtitle">Priorize alertas, investigue evidências e exporte resultados.</p></div></div><div class="updated" id="updated"></div></header>
+<section class="stats" aria-label="Resumo"><article class="stat"><div class="stat-head"><span>Alertas ativos</span><span>●</span></div><div class="stat-value" id="total"></div><small>transações acima do limite</small></article><article class="stat"><div class="stat-head"><span>Prioridade crítica</span><span>▲</span></div><div class="stat-value" id="critical-total"></div><small>exigem análise primeiro</small></article><article class="stat"><div class="stat-head"><span>Fraudes confirmadas</span><span>✓</span></div><div class="stat-value" id="confirmed-total"></div><small>rótulo conhecido no dataset</small></article></section>
+<section class="risk-strip"><div class="section-head"><h2>Prioridade dos alertas</h2><button class="btn link" id="all-risk">Ver todos</button></div><div class="risk-grid" id="risk-grid"></div></section>
+<section class="workspace"><div class="toolbar"><label class="field search"><span>Buscar transação</span><input class="control" id="search" type="search" placeholder="Digite o ID"></label><label class="field"><span>Confirmação</span><select class="control" id="actual"><option value="all">Todas</option><option value="1">Confirmadas</option><option value="0">Não confirmadas</option></select></label><label class="field"><span>Ordenar</span><select class="control" id="sort"><option value="risk-desc">Maior risco</option><option value="amount-desc">Maior valor</option><option value="amount-asc">Menor valor</option><option value="id-asc">ID crescente</option></select></label><button class="btn" id="clear">Limpar</button><button class="btn primary" id="export">Exportar CSV</button></div><div class="result-row"><span id="count"></span><span id="active-filter"></span></div><div class="table-wrap"><table><thead><tr><th>Transação</th><th>Prioridade</th><th class="num">Risco</th><th class="num">Valor</th><th>Confirmação</th><th></th></tr></thead><tbody id="body"></tbody></table></div><div class="pager"><span id="page"></span><div class="pager-actions"><button class="btn" id="previous">Anterior</button><button class="btn" id="next">Próxima</button></div></div></section>
+<details class="model-info"><summary>Sobre a qualidade da análise</summary><p id="quality"></p></details>
+<dialog id="details"><div class="dialog-head"><div><div class="eyebrow">Detalhes do alerta</div><h2 id="detail-title"></h2></div><button class="close" id="close" aria-label="Fechar">×</button></div><div class="dialog-body"><div class="detail-grid"><div class="detail"><span>Probabilidade de fraude</span><strong id="detail-probability"></strong></div><div class="detail"><span>Prioridade</span><strong id="detail-risk"></strong></div><div class="detail"><span>Valor</span><strong id="detail-amount"></strong></div><div class="detail"><span>Tempo no dataset</span><strong id="detail-time"></strong></div></div><div class="signals"><strong>Principais sinais estatísticos</strong><div id="detail-signals"></div></div><div class="note" id="detail-basis"></div></div></dialog>
+</main><script>const DATA=__DATA__,labels={critical:'Crítico',high:'Alto',moderate:'Moderado',watch:'Observação'},$=id=>document.getElementById(id),escapeHtml=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));let page=1,selectedRisk='all';const perPage=25,riskOrder={critical:4,high:3,moderate:2,watch:1};
+const counts=Object.fromEntries(Object.keys(labels).map(key=>[key,DATA.alerts.filter(item=>item.risk===key).length]));$('total').textContent=DATA.alerts.length.toLocaleString('pt-BR');$('critical-total').textContent=counts.critical.toLocaleString('pt-BR');$('confirmed-total').textContent=DATA.alerts.filter(item=>item.actual===1).length.toLocaleString('pt-BR');$('updated').textContent='Atualizado nesta análise';$('quality').textContent=`Precisão ${(DATA.evaluation.precision*100).toFixed(1)}%, recall ${(DATA.evaluation.recall*100).toFixed(1)}% e PR-AUC ${(DATA.evaluation.pr_auc*100).toFixed(1)}%. Modelo ${DATA.model}; limite ${(DATA.threshold).toFixed(3)}%.`;
+$('risk-grid').innerHTML=Object.entries(labels).map(([key,label])=>`<button class="risk-filter" data-risk="${key}"><strong>${counts[key].toLocaleString('pt-BR')}</strong><span>${label}</span></button>`).join('');
+function filtered(){let result=DATA.alerts.filter(item=>(!$('search').value||String(item.id).includes($('search').value.trim()))&&(selectedRisk==='all'||item.risk===selectedRisk)&&($('actual').value==='all'||String(item.actual)===$('actual').value));const sort=$('sort').value;return result.sort((a,b)=>sort==='amount-desc'?b.amount-a.amount:sort==='amount-asc'?a.amount-b.amount:sort==='id-asc'?a.id-b.id:(riskOrder[b.risk]-riskOrder[a.risk]||b.probability-a.probability))}
+function draw(){const rows=filtered(),pages=Math.max(1,Math.ceil(rows.length/perPage));page=Math.min(page,pages);$('count').textContent=`${rows.length.toLocaleString('pt-BR')} alertas encontrados`;$('active-filter').textContent=selectedRisk==='all'?'Todas as prioridades':`Prioridade: ${labels[selectedRisk]}`;$('page').textContent=`Página ${page} de ${pages}`;$('previous').disabled=page===1;$('next').disabled=page===pages;document.querySelectorAll('.risk-filter').forEach(button=>button.classList.toggle('active',button.dataset.risk===selectedRisk));const visible=rows.slice((page-1)*perPage,page*perPage);$('body').innerHTML=visible.length?visible.map(item=>`<tr><td class="id">#${item.id}</td><td><span class="badge ${item.risk}">${labels[item.risk]}</span></td><td class="num">${item.probability.toFixed(1)}%</td><td class="num">${item.amount.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td class="status ${item.actual?'confirmed':''}">${item.actual?'Confirmada':'Não confirmada'}</td><td class="num"><button class="btn link details-button" data-id="${item.id}">Ver detalhes</button></td></tr>`).join(''):`<tr><td colspan="6" class="empty">Nenhuma transação encontrada com esses filtros.</td></tr>`;document.querySelectorAll('.details-button').forEach(button=>button.onclick=()=>openDetails(Number(button.dataset.id)))}
+function openDetails(id){const item=DATA.alerts.find(row=>row.id===id);$('detail-title').textContent=`Transação #${item.id}`;$('detail-probability').textContent=`${item.probability.toFixed(2)}%`;$('detail-risk').textContent=labels[item.risk];$('detail-amount').textContent=item.amount.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});$('detail-time').textContent=`${item.time.toLocaleString('pt-BR')} s`;$('detail-basis').textContent=item.actual?'Fraude confirmada pelo rótulo Class=1 do dataset.':'O modelo gerou um alerta, mas o dataset possui Class=0 para esta transação.';$('detail-signals').innerHTML=item.signals.map(signal=>`<div class="signal"><span>${escapeHtml(signal.feature)}</span><strong>${signal.contribution>0?'+':''}${signal.contribution.toFixed(2)}</strong></div>`).join('');$('details').showModal()}
+document.querySelectorAll('.risk-filter').forEach(button=>button.onclick=()=>{selectedRisk=button.dataset.risk;page=1;draw()});$('all-risk').onclick=()=>{selectedRisk='all';page=1;draw()};[$('search'),$('actual'),$('sort')].forEach(control=>control.addEventListener('input',()=>{page=1;draw()}));$('clear').onclick=()=>{$('search').value='';$('actual').value='all';$('sort').value='risk-desc';selectedRisk='all';page=1;draw()};$('previous').onclick=()=>{page--;draw()};$('next').onclick=()=>{page++;draw()};$('close').onclick=()=>$('details').close();$('details').onclick=event=>{if(event.target===$('details'))$('details').close()};$('export').onclick=()=>{const rows=filtered(),csv=['id,probabilidade,nivel,valor,confirmacao',...rows.map(item=>[item.id,item.probability,item.risk,item.amount,item.actual].join(','))].join('\n'),link=document.createElement('a');link.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));link.download='alertas-filtrados.csv';link.click();URL.revokeObjectURL(link.href)};draw();</script></body></html>'''
 
-fragment = f'''<div id="fraud-locator">
-  <h1>Localizador de transações suspeitas</h1>
-  <div class="viz-grid">
-    <section class="card viz-stat"><span class="text-muted">Alertas</span><strong class="viz-stat-value">{summary['alerts']:,}</strong></section>
-    <section class="card viz-stat"><span class="text-muted">Fraudes confirmadas</span><strong class="viz-stat-value">{summary['confirmed']:,}</strong></section>
-    <section class="card viz-stat"><span class="text-muted">Recall no teste</span><strong class="viz-stat-value">{summary['recall']}%</strong></section>
-  </div>
-  <div class="viz-controls">
-    <label class="form-label">Buscar ID <input id="fraud-search" class="form-control" type="search" inputmode="numeric" placeholder="Ex.: 541"></label>
-    <label class="form-label">Risco mínimo: <span id="risk-value">{summary['threshold']}%</span><input id="risk-min" class="form-range" type="range" min="0" max="100" step="1" value="{int(summary['threshold'])}"></label>
-    <label class="form-label">Situação <select id="fraud-class" class="form-select"><option value="all">Todas</option><option value="1">Fraude confirmada</option><option value="0">Falso positivo</option></select></label>
-  </div>
-  <p id="fraud-count" class="text-muted text-small" aria-live="polite"></p>
-  <div class="table-responsive"><table class="table table-sm">
-    <thead><tr><th>ID</th><th class="text-end">Risco</th><th class="text-end">Valor</th><th class="text-end">Tempo (s)</th><th>Situação conhecida</th><th>Justificativa</th></tr></thead>
-    <tbody id="fraud-body"></tbody>
-  </table></div>
-</div>
-<style>
-#fraud-locator .viz-grid{{margin-bottom:1rem}} #fraud-locator .viz-controls{{margin:1rem 0}}
-#fraud-locator .confirmed{{color:var(--destructive)}} #fraud-locator .risk{{font-weight:500}}
-</style>
-<script>
-(()=>{{
-const root=document.getElementById('fraud-locator');
-const data={json.dumps(data, separators=(',', ':'))};
-const search=root.querySelector('#fraud-search'), range=root.querySelector('#risk-min'), cls=root.querySelector('#fraud-class');
-const body=root.querySelector('#fraud-body'), count=root.querySelector('#fraud-count'), riskValue=root.querySelector('#risk-value');
-const esc=s=>String(s).replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
-function render(){{
- const q=search.value.trim(), min=Number(range.value), c=cls.value;
- const filtered=data.filter(x=>(!q||String(x.id).includes(q))&&x.r>=min&&(c==='all'||String(x.a)===c));
- riskValue.textContent=min+'%'; count.textContent=filtered.length.toLocaleString('pt-BR')+' transações encontradas; exibindo até 100.';
- body.innerHTML=filtered.slice(0,100).map(x=>`<tr><td>${{esc(x.id)}}</td><td class="text-end risk">${{x.r.toLocaleString('pt-BR')}}%</td><td class="text-end">${{x.v.toLocaleString('pt-BR',{{style:'currency',currency:'EUR'}})}}</td><td class="text-end">${{x.t.toLocaleString('pt-BR')}}</td><td class="${{x.a===1?'confirmed':''}}">${{x.a===1?'Fraude confirmada':'Falso positivo'}}</td><td>${{esc(x.j)}}</td></tr>`).join('');
-}}
-[search,range,cls].forEach(el=>el.addEventListener('input',render)); render();
-}})();
-</script>'''
-
-standalone = f'''<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Transações suspeitas</title><style>
-:root{{--bg:#f6f7fb;--surface:#fff;--text:#172033;--muted:#667085;--border:#dfe3ea;--accent:#3157d5;--danger:#b42318}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}}main{{max-width:1100px;margin:auto;padding:28px}}h1{{font-size:24px}}h2{{font-size:18px;margin-top:28px}}.stats,.files{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}}.stat,.file{{background:var(--surface);padding:18px;border:1px solid var(--border);border-radius:10px}}.stat strong{{display:block;font-size:26px;margin-top:6px}}.file strong,.file span{{display:block;margin-bottom:7px}}.file a{{color:var(--accent)}}.controls{{display:flex;gap:16px;align-items:end;flex-wrap:wrap;margin:22px 0}}label{{display:grid;gap:6px}}input,select{{font:inherit;padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--surface)}}input[type=range]{{padding:0}}.table-wrap{{overflow:auto;background:var(--surface);border:1px solid var(--border);border-radius:10px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:10px 12px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}}th{{position:sticky;top:0;background:var(--surface)}}.num{{text-align:right}}.confirmed{{color:var(--danger);font-weight:600}}.muted{{color:var(--muted)}}.tools{{margin-top:18px;color:var(--muted)}}@media(max-width:650px){{.stats,.files{{grid-template-columns:1fr}}main{{padding:16px}}}}</style></head><body><main>
-<h1>Localizador de transações suspeitas</h1><div class="stats"><div class="stat"><span>Alertas</span><strong>{summary['alerts']:,}</strong></div><div class="stat"><span>Fraudes confirmadas</span><strong>{summary['confirmed']:,}</strong></div><div class="stat"><span>Recall no teste</span><strong>{summary['recall']}%</strong></div></div>
-<div class="controls"><label>Buscar ID<input id="q" type="search" inputmode="numeric" placeholder="Ex.: 541"></label><label>Risco mínimo <output id="rv">{summary['threshold']}%</output><input id="r" type="range" min="0" max="100" value="{int(summary['threshold'])}"></label><label>Situação<select id="c"><option value="all">Todas</option><option value="1">Fraude confirmada</option><option value="0">Falso positivo</option></select></label></div><p id="count" class="muted"></p>
-<div class="table-wrap"><table><thead><tr><th>ID</th><th class="num">Risco</th><th class="num">Valor</th><th class="num">Tempo (s)</th><th>Situação conhecida</th><th>Justificativa</th></tr></thead><tbody id="rows"></tbody></table></div>
-<h2>Arquivos conectados</h2><div class="files">{''.join(f'<div class="file"><strong>{html.escape(label)}</strong><span class="muted">{html.escape(name)} · {size_label(size) if size else "gerado neste painel"}</span><a href="{html.escape(name)}">Abrir arquivo</a></div>' for label, name, size in artifacts)}</div>
-<p class="tools">Banco: tabela <code>alerts</code> ligada à tabela <code>transactions</code>.</p></main><script>
-const data={json.dumps(data, separators=(',', ':'))},q=document.querySelector('#q'),r=document.querySelector('#r'),c=document.querySelector('#c'),rows=document.querySelector('#rows'),count=document.querySelector('#count'),rv=document.querySelector('#rv');
-function draw(){{const f=data.filter(x=>(!q.value||String(x.id).includes(q.value))&&x.r>=+r.value&&(c.value==='all'||String(x.a)===c.value));rv.value=r.value+'%';count.textContent=f.length.toLocaleString('pt-BR')+' transações encontradas; exibindo até 250.';rows.innerHTML=f.slice(0,250).map(x=>`<tr><td>${{x.id}}</td><td class="num">${{x.r.toLocaleString('pt-BR')}}%</td><td class="num">${{x.v.toLocaleString('pt-BR',{{style:'currency',currency:'EUR'}})}}</td><td class="num">${{x.t.toLocaleString('pt-BR')}}</td><td class="${{x.a?'confirmed':''}}">${{x.a?'Fraude confirmada':'Falso positivo'}}</td><td>${{x.j}}</td></tr>`).join('')}}[q,r,c].forEach(x=>x.addEventListener('input',draw));draw();</script></body></html>'''
-
-OUT.write_text(standalone, encoding="utf-8")
-FRAGMENT.write_text(fragment, encoding="utf-8")
-print(json.dumps({"dashboard": str(OUT), "visualization": str(FRAGMENT), "rows": len(data)}))
-
+shutil.copyfile(LOGO, OUTPUT_LOGO)
+OUT.write_text(template.replace("__DATA__", json.dumps(payload, ensure_ascii=False, separators=(",", ":"))), encoding="utf-8")
+print(json.dumps({"dashboard": str(OUT), "alerts": len(alerts)}, ensure_ascii=False))
