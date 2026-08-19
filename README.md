@@ -1,101 +1,110 @@
 # Fraud Transaction Monitor
 
-Sistema experimental de detecção e monitoramento de fraudes em transações, com modelo probabilístico, SQLite, alertas explicáveis e dashboard interativo para VS Code.
+Sistema experimental de detecção e monitoramento de fraudes em transações, com comparação de modelos, SQLite, alertas explicáveis, API REST e dashboard interativo para VS Code.
 
-O projeto importa o dataset ULB/Kaggle, treina um classificador, calcula o risco de cada transação, registra alertas e apresenta justificativas técnicas em um painel pesquisável.
+## Resultados da versão 2
 
-## Estrutura
+Avaliação final cronológica, sem usar o teste para escolher o limite:
+
+| Métrica | Resultado |
+|---|---:|
+| Modelo selecionado | Regressão logística balanceada |
+| Precisão | 42,2% |
+| Recall | 82,7% |
+| F1 | 55,9% |
+| PR-AUC | 76,4% |
+| Alertas no conjunto completo | 823 |
+
+A versão anterior tinha aproximadamente 5% de precisão e gerava 6.680 alertas. Os resultados são experimentais e não autorizam bloqueio automático de pagamentos.
+
+## Arquitetura
 
 ```text
-.
-├── .vscode/                       # tarefas, depuração e extensões
-├── outputs/
-│   ├── fraud_model.json           # modelo e métricas
-│   └── painel-transacoes-suspeitas.html
+fraud-transaction-monitor/
+├── src/fraud_monitor/
+│   ├── constants.py       # variáveis e níveis de risco
+│   ├── database.py        # importação e esquema SQLite
+│   ├── metrics.py         # PR-AUC, precisão, recall e threshold
+│   ├── models.py          # Gaussian NB e regressão logística
+│   └── pipeline.py        # treino, seleção e scoring
+├── tests/                 # testes automatizados
 ├── work/
-│   ├── build_dashboard.py         # gerador do painel
-│   └── dataset/creditcard.csv     # local; não enviado ao GitHub
+│   ├── build_dashboard.py
+│   └── dataset/           # ignorado pelo Git
+├── outputs/               # banco, modelo e dashboard
+├── api_server.py
 ├── fraud_detector.py
-├── requirements.txt
-└── README.md
+└── .github/workflows/ci.yml
 ```
 
-O banco `outputs/fraud_detection.db`, o CSV e o ZIP do Kaggle são ignorados pelo Git devido ao tamanho.
+## Executar no VS Code
 
-## Passo a passo no VS Code
-
-### 1. Abrir o projeto
-
-No VS Code, escolha **File → Open Folder** e abra a pasta deste projeto. Como alternativa, execute `code .` nesta pasta.
-
-### 2. Instalar as extensões
-
-Aceite a recomendação do VS Code para instalar Python, Pylance e SQLite Viewer.
-
-### 3. Conferir o dataset
-
-O arquivo precisa existir em `work/dataset/creditcard.csv`. Se estiver começando em outro computador, baixe-o no [dataset do Kaggle](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud).
-
-### 4. Executar as tarefas
-
-Abra **Terminal → Run Task** e execute, aguardando cada uma terminar:
+Abra **Terminal → Run Task** e execute na ordem:
 
 1. `1. Instalar dependências`
 2. `2. Importar CSV`
-3. `3. Treinar modelo`
+3. `3. Treinar modelos`
 4. `4. Gerar alertas`
 5. `5. Atualizar painel`
 6. `6. Servir dashboard no VS Code`
 
-Na primeira execução, faça todas as etapas. Para apenas atualizar a visualização após novos alertas, execute as tarefas 5 e 6.
+Para abrir o painel dentro do editor, pressione `Ctrl+Shift+P`, escolha **Simple Browser: Show** e informe:
 
-### Abrir o dashboard dentro do VS Code
-
-1. Execute **Terminal → Run Task → 6. Servir dashboard no VS Code** e deixe esse terminal aberto.
-2. Pressione `Ctrl+Shift+P`.
-3. Procure e selecione **Simple Browser: Show**.
-4. Informe `http://localhost:8000/painel-transacoes-suspeitas.html`.
-5. O dashboard abrirá em uma aba interna do VS Code.
-
-Se preferir o navegador normal, execute a tarefa `7. Abrir painel externo`.
-
-O dashboard lista o banco, o modelo e o próprio painel, além dos filtros de transações suspeitas.
-
-### Entender a justificativa
-
-`Fraude confirmada` significa que a transação possui `Class = 1` no dataset original; não é uma confirmação produzida pelo modelo. A coluna **Justificativa** apresenta os três atributos que mais aproximaram a transação do padrão estatístico de fraude. Valores positivos entre parênteses indicam força favorável à classe fraudulenta. Como `V1` a `V28` são componentes PCA anonimizados, eles não permitem justificativas comerciais como localização, dispositivo ou estabelecimento.
-
-### 5. Examinar o banco
-
-No explorador do VS Code, abra `outputs/fraud_detection.db` com SQLite Viewer. Consulta útil:
-
-```sql
-SELECT a.transaction_id, a.fraud_probability, t.Amount, t.Time, a.actual_class
-FROM alerts AS a
-JOIN transactions AS t ON t.rowid = a.transaction_id
-ORDER BY a.fraud_probability DESC;
+```text
+http://localhost:8000/painel-transacoes-suspeitas.html
 ```
 
-### 6. Depurar o código
+O painel oferece métricas, distribuição por risco, busca, filtros, paginação, justificativas e exportação CSV.
 
-Abra **Run and Debug**, pressione `F5` e escolha `Treinar detector` ou `Gerar alertas`. Você pode adicionar pontos de interrupção no arquivo `fraud_detector.py`.
+## Dataset
 
-## Publicar no GitHub
+Baixe `creditcard.csv` no [dataset Credit Card Fraud Detection](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud) e coloque em `work/dataset/`.
 
-Crie um repositório vazio e execute:
+O dataset, ZIP e banco SQLite são ignorados pelo Git. As variáveis `V1`–`V28` são componentes PCA anonimizados; por isso, a explicação indica contribuição estatística, não motivos comerciais como localização ou dispositivo.
+
+## API REST
+
+Execute a tarefa `8. Iniciar API`. Endereço padrão: `http://localhost:8080`.
+
+| Método | Rota | Uso |
+|---|---|---|
+| GET | `/health` | Saúde e versão do modelo |
+| GET | `/alerts?risk=critical&limit=100` | Listar alertas |
+| GET | `/alerts/{transaction_id}` | Detalhar um alerta |
+| PATCH | `/alerts/{transaction_id}` | Atualizar revisão |
+| POST | `/transactions/analyze` | Analisar nova transação |
+
+Exemplo de atualização:
+
+```json
+{"review_status": "investigating"}
+```
+
+O endpoint de análise exige `Time`, `Amount` e `V1`–`V28`, pois o modelo foi treinado nessas variáveis.
+
+## Avaliação correta
+
+Os dados são ordenados por tempo e divididos em:
+
+- 60% treino;
+- 20% validação, usada para seleção do modelo e threshold;
+- 20% teste, utilizado apenas na avaliação final.
+
+O pipeline compara Gaussian Naive Bayes e regressão logística balanceada pela PR-AUC da validação. O threshold busca pelo menos 80% de recall e maximiza a precisão.
+
+## Testes e CI
+
+Execute a tarefa `9. Executar testes` ou:
 
 ```powershell
-git init
-git add .
-git commit -m "Cria detector de transações suspeitas"
-git branch -M main
-git remote add origin https://github.com/SEU-USUARIO/SEU-REPOSITORIO.git
-git push -u origin main
+python -m unittest discover -s tests -v
 ```
 
-Revise `git status` antes do commit. O `.gitignore` evita enviar o banco, o dataset e ambientes locais.
+O GitHub Actions valida os testes e a sintaxe Python em cada push e pull request.
 
 ## Limitações
 
-Este projeto é uma demonstração. As variáveis `V1` a `V28` são anonimizadas, e o modelo não deve bloquear pagamentos reais sem validação, calibração e revisão humana.
-
+- Dataset histórico, anonimizado e restrito a dois dias de 2013.
+- Probabilidades não devem ser tratadas como garantia de fraude.
+- Níveis de risco são relativos ao threshold calibrado.
+- Produção exige variáveis reais, monitoramento de drift, auditoria, segurança e revisão humana.

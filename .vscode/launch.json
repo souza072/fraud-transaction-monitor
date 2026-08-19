@@ -16,7 +16,14 @@
       "program": "${workspaceFolder}/fraud_detector.py",
       "console": "integratedTerminal",
       "args": ["score", "outputs/fraud_detection.db", "outputs/fraud_model.json"]
+    },
+    {
+      "name": "Iniciar API",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/api_server.py",
+      "console": "integratedTerminal",
+      "args": ["--db", "outputs/fraud_detection.db", "--model", "outputs/fraud_model.json", "--port", "8080"]
     }
   ]
 }
-

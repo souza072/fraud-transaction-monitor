@@ -3,11 +3,12 @@
   "tasks": [
     {"label": "1. Instalar dependências", "type": "process", "command": "python", "args": ["-m", "pip", "install", "--user", "-r", "requirements.txt"], "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []},
     {"label": "2. Importar CSV", "type": "process", "command": "python", "args": ["fraud_detector.py", "import", "work/dataset/creditcard.csv", "outputs/fraud_detection.db"], "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []},
-    {"label": "3. Treinar modelo", "type": "process", "command": "python", "args": ["fraud_detector.py", "train", "outputs/fraud_detection.db", "outputs/fraud_model.json"], "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []},
+    {"label": "3. Treinar modelos", "type": "process", "command": "python", "args": ["fraud_detector.py", "train", "outputs/fraud_detection.db", "outputs/fraud_model.json", "--target-recall", "0.80"], "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []},
     {"label": "4. Gerar alertas", "type": "process", "command": "python", "args": ["fraud_detector.py", "score", "outputs/fraud_detection.db", "outputs/fraud_model.json"], "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []},
     {"label": "5. Atualizar painel", "type": "process", "command": "python", "args": ["work/build_dashboard.py"], "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []},
     {"label": "6. Servir dashboard no VS Code", "type": "process", "command": "python", "args": ["-m", "http.server", "8000", "--directory", "outputs"], "options": {"cwd": "${workspaceFolder}"}, "isBackground": true, "problemMatcher": {"owner": "dashboard", "pattern": {"regexp": "^$"}, "background": {"activeOnStart": true, "beginsPattern": ".*", "endsPattern": "Serving HTTP.*"}}},
-    {"label": "7. Abrir painel externo", "type": "process", "command": "powershell", "args": ["-NoProfile", "-Command", "Start-Process '${workspaceFolder}/outputs/painel-transacoes-suspeitas.html'"], "problemMatcher": []}
+    {"label": "7. Abrir painel externo", "type": "process", "command": "powershell", "args": ["-NoProfile", "-Command", "Start-Process '${workspaceFolder}/outputs/painel-transacoes-suspeitas.html'"], "problemMatcher": []},
+    {"label": "8. Iniciar API", "type": "process", "command": "python", "args": ["api_server.py", "--db", "outputs/fraud_detection.db", "--model", "outputs/fraud_model.json", "--port", "8080"], "options": {"cwd": "${workspaceFolder}"}, "isBackground": true, "problemMatcher": {"owner": "api", "pattern": {"regexp": "^$"}, "background": {"activeOnStart": true, "beginsPattern": ".*", "endsPattern": "API disponível.*"}}},
+    {"label": "9. Executar testes", "type": "process", "command": "python", "args": ["-m", "unittest", "discover", "-s", "tests", "-v"], "options": {"cwd": "${workspaceFolder}"}, "problemMatcher": []}
   ]
 }
-
